@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <meta name="robots" content="noindex, nofollow, noarchive, nosnippet, nocache, noimageindex">
+  <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet, nocache, noimageindex">
+  <meta name="bingbot" content="noindex, nofollow, noarchive, nosnippet, nocache, noimageindex">
+  <meta name="slurp" content="noindex, nofollow, noarchive">
+  <meta name="duckduckbot" content="noindex, nofollow">
+  <meta name="baiduspider" content="noindex, nofollow">
+  <meta name="yandexbot" content="noindex, nofollow">
+  <title>Sector Scan</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg: #f8fafc; /* Very light whitish grey */
+      --grid: #e2e8f0;
+      --text: #334155;
+      --primary: #2563eb; /* Bright blue for sonar */
+      --found: #10b981; /* Emerald green for success */
+      --font: 'JetBrains Mono', monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* HTML5 Canvas for the radar game */
+    #scanner-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      cursor: crosshair;
+    }
+
+    /* UI Overlay (Unclickable, just for info) */
+    .ui-layer {
+      position: absolute;
+      top: 2rem;
+      left: 2rem;
+      z-index: 10;
+      pointer-events: none; /* Lets clicks pass through to the canvas */
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 6px 16px;
+      background: white;
+      border: 1px solid var(--grid);
+      border-radius: 50px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+      margin-bottom: 1rem;
+    }
+
+    .instructions {
+      font-size: 0.85rem;
+      color: #64748b;
+      max-width: 300px;
+      line-height: 1.5;
+    }
+
+    #score-counter {
+      color: var(--primary);
+      font-weight: 800;
+    }
+
+    /* Win Screen / Final Payload */
+    .win-screen {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.9);
+      opacity: 0;
+      pointer-events: none;
+      z-index: 20;
+      background: rgba(255, 255, 255, 0.8);
+      backdrop-filter: blur(25px);
+      -webkit-backdrop-filter: blur(25px);
+      padding: 4rem;
+      border-radius: 24px;
+      border: 1px solid rgba(255, 255, 255, 1);
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.1);
+      text-align: center;
+      transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .win-screen.active {
+      transform: translate(-50%, -50%) scale(1);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .win-screen h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      margin-bottom: 1rem;
+      color: #0f172a;
+      letter-spacing: -1px;
+    }
+
+    .win-screen p {
+      color: #64748b;
+      margin-bottom: 2rem;
+    }
+
+    .restart-btn {
+      padding: 12px 30px;
+      background: var(--text);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-family: var(--font);
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .restart-btn:hover {
+      background: var(--primary);
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(37, 99, 235, 0.2);
+    }
+    
+    @media (max-width: 600px) {
+      .ui-layer { top: 1rem; left: 1rem; }
+      .win-screen { padding: 2rem; width: 90%; }
+      .win-screen h1 { font-size: 1.8rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="ui-layer" id="ui">
+    <div class="status-badge">
+      TARGETS LOCATED: <span id="score-counter">0 / 5</span>
+    </div>
+    <div class="instructions" id="inst-text">
+      Tap the grid to emit a sonar ping. Locate and lock all hidden anomalies before they fade into the background.
+    </div>
+  </div>
+
+  <canvas id="scanner-canvas"></canvas>
+
+  <div class="win-screen" id="win-screen">
+    <h1>Grid Secured.</h1>
+    <p>All nodes successfully synchronized. Awaiting next directive.</p>
+    <button class="restart-btn" onclick="initGame()">Re-Scan Sector</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('scanner-canvas');
+    const ctx = canvas.getContext('2d');
+    const scoreElement = document.getElementById('score-counter');
+    const winScreen = document.getElementById('win-screen');
+    const uiLayer = document.getElementById('ui');
+    
+    let width, height;
+    let nodes = [];
+    let pings = [];
+    let particles = [];
+    let foundCount = 0;
+    const TOTAL_NODES = 5;
+    let gameActive = true;
+
+    // Resize canvas to fit window perfectly
+    function resize() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Initialize or Restart Game
+    function initGame() {
+      nodes = [];
+      pings = [];
+      particles = [];
+      foundCount = 0;
+      gameActive = true;
+      scoreElement.innerText = `0 / ${TOTAL_NODES}`;
+      winScreen.classList.remove('active');
+      uiLayer.style.opacity = "1";
+
+      // Place hidden nodes randomly (keeping them away from the absolute edges)
+      for (let i = 0; i < TOTAL_NODES; i++) {
+        nodes.push({
+          x: 100 + Math.random() * (width - 200),
+          y: 150 + Math.random() * (height - 250),
+          found: false,
+          litAmount: 0 // How visible the node is (0 to 1)
+        });
+      }
+    }
+
+    // Interaction handler (Mouse & Touch)
+    function handleInteract(e) {
+      if (!gameActive) return;
+      e.preventDefault();
+
+      // Get accurate coordinates for mouse or touch
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+      let clickedNode = false;
+
+      // 1. Check if user clicked a node
+      nodes.forEach(node => {
+        if (!node.found) {
+          const dist = Math.hypot(node.x - clientX, node.y - clientY);
+          
+          // You must click near it, AND it must be currently illuminated by a ping
+          if (dist < 40 && node.litAmount > 0.15) {
+            node.found = true;
+            node.litAmount = 1; // Lock visibility
+            clickedNode = true;
+            foundCount++;
+            scoreElement.innerText = `${foundCount} / ${TOTAL_NODES}`;
+            createExplosion(node.x, node.y);
+            
+            if (foundCount >= TOTAL_NODES) triggerWin();
+          }
+        }
+      });
+
+      // 2. Regardless of clicking a node, emit a new Sonar Ping
+      pings.push({
+        x: clientX,
+        y: clientY,
+        radius: 0,
+        alpha: 1
+      });
+    }
+
+    canvas.addEventListener('mousedown', handleInteract);
+    canvas.addEventListener('touchstart', handleInteract, {passive: false});
+
+    // Visual effect when a node is locked
+    function createExplosion(x, y) {
+      for (let i = 0; i < 15; i++) {
+        particles.push({
+          x: x, y: y,
+          vx: (Math.random() - 0.5) * 8,
+          vy: (Math.random() - 0.5) * 8,
+          life: 1,
+          color: '#10b981' // Emerald green
+        });
+      }
+    }
+
+    function triggerWin() {
+      gameActive = false;
+      setTimeout(() => {
+        uiLayer.style.opacity = "0";
+        winScreen.classList.add('active');
+      }, 800); // Slight delay for dramatic effect
+    }
+
+    // Main Rendering & Logic Loop
+    function loop() {
+      // Clear screen
+      ctx.clearRect(0, 0, width, height);
+
+      // Draw minimal blueprint grid
+      ctx.strokeStyle = '#e2e8f0';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = 0; x < width; x += 50) { ctx.moveTo(x, 0); ctx.lineTo(x, height); }
+      for (let y = 0; y < height; y += 50) { ctx.moveTo(0, y); ctx.lineTo(width, y); }
+      ctx.stroke();
+
+      // Update and Draw Sonar Pings
+      for (let i = pings.length - 1; i >= 0; i--) {
+        let p = pings[i];
+        p.radius += 8; // Speed of the sonar wave
+        p.alpha -= 0.008; // Fade out over time
+
+        if (p.alpha <= 0) {
+          pings.splice(i, 1);
+          continue;
+        }
+
+        // Draw expanding ring
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(37, 99, 235, ${p.alpha})`; // Blue
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Check if the ping line is intersecting a hidden node
+        nodes.forEach(node => {
+          if (!node.found) {
+            const dist = Math.hypot(node.x - p.x, node.y - p.y);
+            // If the expanding ring edge is touching the node
+            if (Math.abs(dist - p.radius) < 15) {
+              node.litAmount = 1; // Illuminate!
+            }
+          }
+        });
+      }
+
+      // Update and Draw Nodes
+      nodes.forEach(node => {
+        if (!node.found) {
+          // If not found, fade back into darkness automatically
+          node.litAmount -= 0.015;
+          if (node.litAmount < 0) node.litAmount = 0;
+        }
+
+        if (node.litAmount > 0) {
+          ctx.save();
+          ctx.translate(node.x, node.y);
+          
+          // Draw geometric node shape
+          ctx.beginPath();
+          ctx.arc(0, 0, 12, 0, Math.PI * 2);
+          if (node.found) {
+            ctx.fillStyle = '#10b981'; // Green if locked
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#10b981';
+          } else {
+            // Fading blue if just illuminated by sonar
+            ctx.fillStyle = `rgba(37, 99, 235, ${node.litAmount})`; 
+          }
+          ctx.fill();
+
+          // Outer crosshair
+          ctx.strokeStyle = node.found ? '#10b981' : `rgba(37, 99, 235, ${node.litAmount})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(-20, 0); ctx.lineTo(-8, 0);
+          ctx.moveTo(20, 0); ctx.lineTo(8, 0);
+          ctx.moveTo(0, -20); ctx.lineTo(0, -8);
+          ctx.moveTo(0, 20); ctx.lineTo(0, 8);
+          ctx.stroke();
+
+          ctx.restore();
+        }
+      });
+
+      // Update and Draw Particles (Explosions)
+      for (let i = particles.length - 1; i >= 0; i--) {
+        let pt = particles[i];
+        pt.x += pt.vx;
+        pt.y += pt.vy;
+        pt.life -= 0.03;
+        
+        if (pt.life <= 0) {
+          particles.splice(i, 1);
+          continue;
+        }
+
+        ctx.fillStyle = pt.color;
+        ctx.globalAlpha = pt.life;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1; // Reset
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    // Start everything
+    initGame();
+    loop();
+  </script>
+</body>
+</html>
